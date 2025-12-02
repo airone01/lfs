@@ -10,13 +10,11 @@ ROOT_DIR=$(realpath $( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null 
 # Path definitions
 DISK_IMG_MAIN="$ROOT_DIR/images/tooling.qcow2"
 DISK_IMG_LFS="$ROOT_DIR/images/lfs.qcow2"
-ISO_FILE="$ROOT_DIR/isos/alpine-standard-3.22.2-x86_64.iso"
 
 # VM Resources
-LFS_NPROC="20"
-# Use $(nproc) dynamically if preferred:
-# LFS_NPROC="$(nproc)"
-LFS_RAM="10"
+# LFS_NPROC="20"
+LFS_NPROC="$(nproc)"
+LFS_RAM="8"
 
 # Rclone Target
 RCLONE_TARGET="GDrive:/LinuxBackups/lsb"
@@ -25,7 +23,6 @@ RCLONE_TARGET="GDrive:/LinuxBackups/lsb"
 # Helper Functions
 # ==============================================================================
 
-# Function to display a command and ask for confirmation
 confirm_and_run() {
     local cmd_str="$1"
     
@@ -39,14 +36,11 @@ confirm_and_run() {
         echo "Operation cancelled."
     fi
     
-    # Pause briefly so user can see output before menu redraws
     echo
     read -p "Press Enter to continue..."
 }
 
-# Logic for Incremental Backup
 run_backup_tooling() {
-    # Find the highest existing index X in tooling.X.tar.gz
     local max_id=0
     
     # Loop through files matching the pattern in ROOT_DIR
@@ -69,8 +63,6 @@ run_backup_tooling() {
     local next_id=$((max_id + 1))
     local backup_file="$ROOT_DIR/tooling.${next_id}.tar.gz"
     
-    # Calculate total size for progress bar (requires du and awk)
-    # -c produces a grand total, -b counts in bytes
     local total_size=$(du -cb "$DISK_IMG_MAIN" 2>/dev/null | tail -n1 | awk '{print $1}')
 
     read -p "Enter compression level for tooling (recommended 6) [0-9]: " level
@@ -84,9 +76,7 @@ run_backup_tooling() {
     confirm_and_run "$cmd"
 }
 
-# Logic for Incremental Backup
 run_backup_lfs() {
-    # Find the highest existing index X in lfs.X.tar.gz
     local max_id=0
     
     # Loop through files matching the pattern in ROOT_DIR
@@ -109,8 +99,6 @@ run_backup_lfs() {
     local next_id=$((max_id + 1))
     local backup_file="$ROOT_DIR/lfs.${next_id}.tar.gz"
     
-    # Calculate total size for progress bar (requires du and awk)
-    # -c produces a grand total, -b counts in bytes
     local total_size=$(du -cb "$DISK_IMG_LFS" 2>/dev/null | tail -n1 | awk '{print $1}')
 
     read -p "Enter compression level for LFS (recommended 6) [0-9]: " level
@@ -122,6 +110,15 @@ run_backup_lfs() {
     local cmd="tar -C \"$ROOT_DIR/images/\" -cf - \"lfs.qcow2\" | pv -s $total_size | gzip -$level > \"$backup_file\""
     
     confirm_and_run "$cmd"
+}
+
+display_title() {
+  echo -e "\033[1;35m   __   ________"
+  echo "  / /  / __/ __/ __ _  ___ ____  ___ ____ ____ ____"
+  echo " / /__/ _/_\\ \\  /  ' \\/ _ \`/ _ \\/ _ \`/ _ \`/ -_) __/"
+  echo "/____/_/ /___/ /_/_/_/\\_,_/_//_/\\_,_/\\_, /\\__/_/"
+  echo -e " LFS 12.4                           /___/\033[0m"
+  echo
 }
 
 # ==============================================================================
@@ -138,61 +135,26 @@ options=(
     "Sync to Google Drive (rclone)"
 )
 
-echo -e "\033[1;35m   __   ________"
-echo "  / /  / __/ __/ __ _  ___ ____  ___ ____ ____ ____"
-echo " / /__/ _/_\\ \\  /  ' \\/ _ \`/ _ \\/ _ \`/ _ \`/ -_) __/"
-echo "/____/_/ /___/ /_/_/_/\\_,_/_//_/\\_,_/\\_, /\\__/_/"
-echo -e " LFS 12.4                           /___/\033[0m"
-echo
+display_title
 
-# Select loop automatically handles invalid numbers by re-prompting
-# It also exits gracefully on EOF (^D)
 select opt in "${options[@]}"
 do
     case $opt in
         "Start LFS (GUI)")
-            CMD="qemu-system-x86_64 \
-                -enable-kvm \
-                -m ${LFS_RAM}G \
-                -smp $LFS_NPROC \
-                -drive file=\"$DISK_IMG_LFS\",format=qcow2 \
-                -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 \
-                -nographic"
+            CMD="qemu-system-x86_64 -enable-kvm -m ${LFS_RAM}G -smp $LFS_NPROC -drive file=\"$DISK_IMG_LFS\",format=qcow2 -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 -vga virtio"
             confirm_and_run "$CMD"
             ;;
         "Start LFS (headless)")
-            CMD="qemu-system-x86_64 \
-                -enable-kvm \
-                -m ${LFS_RAM}G \
-                -smp $LFS_NPROC \
-                -drive file=\"$DISK_IMG_LFS\",format=qcow2 \
-                -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 \
-                -vga virtio \
-                -display default"
+            CMD="qemu-system-x86_64 -enable-kvm -m ${LFS_RAM}G -smp $LFS_NPROC -drive file=\"$DISK_IMG_LFS\",format=qcow2 -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 -nographic"
             confirm_and_run "$CMD"
             ;;
         "Start tooling distro (GUI)")
-            CMD="qemu-system-x86_64 \
-                -enable-kvm \
-                -m ${LFS_RAM}G \
-                -smp $LFS_NPROC \
-                -drive file=\"$DISK_IMG_MAIN\",format=qcow2 \
-                -drive file=\"$DISK_IMG_LFS\",format=qcow2 \
-                -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 \
-                -vga virtio \
-                -display default"
+            CMD="qemu-system-x86_64 -enable-kvm -m ${LFS_RAM}G -smp $LFS_NPROC -drive file=\"$DISK_IMG_MAIN\",format=qcow2 -drive file=\"$DISK_IMG_LFS\",format=qcow2 -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 -vga virtio"
             confirm_and_run "$CMD"
             ;;
         "Start tooling distro (headless)")
             echo "Note: Press 'Ctrl+A' then 'x' to terminate the VM."
-            CMD="qemu-system-x86_64 \
-                -enable-kvm \
-                -m ${LFS_RAM}G \
-                -smp $LFS_NPROC \
-                -drive file=\"$DISK_IMG_MAIN\",format=qcow2 \
-                -drive file=\"$DISK_IMG_LFS\",format=qcow2 \
-                -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 \
-                -nographic"
+            CMD="qemu-system-x86_64 -enable-kvm -m ${LFS_RAM}G -smp $LFS_NPROC -drive file=\"$DISK_IMG_MAIN\",format=qcow2 -drive file=\"$DISK_IMG_LFS\",format=qcow2 -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 -nographic"
             confirm_and_run "$CMD"
             ;;
         "Compress and backup the tooling disk")
