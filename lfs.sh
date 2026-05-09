@@ -116,6 +116,84 @@ run_backup_lfs() {
     confirm_and_run "$cmd"
 }
 
+run_init_image() {
+    local img_path="$1"
+    local img_name="$2"
+    local img_size="$3"
+
+    if [[ -f "$img_path" ]]; then
+        echo -e "\033[1;31mWarning:\033[0m $img_name already exists at '$img_path'."
+        read -rp "Overwrite it? [y/N] " response
+        if [[ ! "$response" =~ ^[yY]$ ]]; then
+            echo "Operation cancelled."
+            echo
+            read -rp "Press Enter to continue..."
+            return
+        fi
+    fi
+
+    local cmd="qemu-img create -f qcow2 \"$img_path\" $img_size"
+    confirm_and_run "$cmd"
+}
+
+run_download_alpine() {
+    local iso_url="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-standard-3.23.4-x86_64.iso"
+    local sha256_url="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-standard-3.23.4-x86_64.iso.sha256"
+    local iso_dest="$ROOT_DIR/images/alpine-standard-3.23.4-x86_64.iso"
+    local sha256_file
+    sha256_file="$(mktemp)"
+
+    mkdir -p "$ROOT_DIR/images"
+
+    if [[ -f "$iso_dest" ]]; then
+        echo -e "\033[1;33mAlpine ISO already exists at '$iso_dest'.\033[0m"
+        read -rp "Re-download it? [y/N] " response
+        if [[ ! "$response" =~ ^[yY]$ ]]; then
+            echo "Skipping download. Verifying existing file..."
+        else
+            rm -f "$iso_dest"
+        fi
+    fi
+
+    if [[ ! -f "$iso_dest" ]]; then
+        echo -e "\nDownloading Alpine ISO..."
+        if ! wget -O "$iso_dest" "$iso_url"; then
+            echo -e "\033[1;31mError:\033[0m Download failed."
+            rm -f "$iso_dest" "$sha256_file"
+            read -rp "Press Enter to continue..."
+            return
+        fi
+    fi
+
+    echo -e "\nFetching checksum..."
+    if ! wget -qO "$sha256_file" "$sha256_url"; then
+        echo -e "\033[1;31mError:\033[0m Failed to fetch SHA256 checksum file."
+        rm -f "$sha256_file"
+        read -rp "Press Enter to continue..."
+        return
+    fi
+
+    echo "Verifying SHA256 checksum..."
+    local expected_hash actual_hash
+    expected_hash="$(awk '{print $1}' "$sha256_file")"
+    actual_hash="$(sha256sum "$iso_dest" | awk '{print $1}')"
+    rm -f "$sha256_file"
+
+    if [[ "$expected_hash" == "$actual_hash" ]]; then
+        echo -e "\033[1;32mChecksum OK:\033[0m $actual_hash"
+        echo -e "Alpine ISO saved to: $iso_dest"
+    else
+        echo -e "\033[1;31mChecksum MISMATCH!\033[0m"
+        echo "  Expected : $expected_hash"
+        echo "  Got      : $actual_hash"
+        echo "The downloaded file may be corrupt. Removing it."
+        rm -f "$iso_dest"
+    fi
+
+    echo
+    read -rp "Press Enter to continue..."
+}
+
 display_title() {
     echo -e "\033[1;35m   __   ________"
     echo "  / /  / __/ __/ __ _  ___  ___  ___  ___  ___ ____"
@@ -137,6 +215,10 @@ options=(
     "Compress and backup the tooling disk"
     "Compress and backup the LFS disk"
     "Sync to Google Drive (rclone)"
+    "Init LFS disk image (30G)"
+    "Init tooling disk image (20G)"
+    "Download Alpine Linux ISO"
+    "Install tooling distro from Alpine ISO"
 )
 
 display_title
@@ -169,6 +251,27 @@ select opt in "${options[@]}"; do
     "Sync to Google Drive (rclone)")
         CMD="rclone sync -P \"$ROOT_DIR\" \"$RCLONE_TARGET\" --exclude \"images/**\""
         confirm_and_run "$CMD"
+        ;;
+    "Init LFS disk image (30G)")
+        run_init_image "$DISK_IMG_LFS" "lfs.qcow2" "30G"
+        ;;
+    "Init tooling disk image (20G)")
+        run_init_image "$DISK_IMG_MAIN" "tooling.qcow2" "20G"
+        ;;
+    "Download Alpine Linux ISO")
+        run_download_alpine
+        ;;
+    "Install tooling distro from Alpine ISO")
+        iso_path="$ROOT_DIR/images/alpine-standard-3.23.4-x86_64.iso"
+        if [[ ! -f "$iso_path" ]]; then
+            echo -e "\033[1;31mError:\033[0m Alpine ISO not found at '$iso_path'."
+            echo "Please download it first via the 'Download Alpine Linux ISO' option."
+            echo
+            read -rp "Press Enter to continue..."
+        else
+            CMD="qemu-system-x86_64 -enable-kvm -m ${LFS_RAM}G -smp $LFS_NPROC -drive file=\"$DISK_IMG_MAIN\",format=qcow2 -cdrom \"$iso_path\" -boot d -nic user,model=virtio-net-pci,hostfwd=tcp::2222-:22 -vga virtio"
+            confirm_and_run "$CMD"
+        fi
         ;;
     *)
         # Standard bash 'select' behavior is to just reprint the prompt
